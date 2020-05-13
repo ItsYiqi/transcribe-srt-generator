@@ -1,5 +1,13 @@
 Description: Upload an object to an S3 bucket, triggering a Lambda event, returning the object key as a Stack Output.
 Parameters:
+  LanguageCode:
+    Description: Language Code sent to Transcribe
+    Type: String
+    Default: zh-CN
+    AllowedValues: 
+      - zh-CN
+      - en-US
+      - en-AU
   UploadBucketName:
     Description: S3 Bucket for user uploading
     Type: String
@@ -19,6 +27,7 @@ Resources:
   
   FileWatcher:
     Type: AWS::Lambda::Function
+    DependsOn: SRTGeneratorStateMachine
     Properties:
       Description: Copy source image to target bucket whilst creating record in Target DDB table
       Handler: index.lambda_handler
@@ -34,7 +43,8 @@ Resources:
             import os
             
             s3 = boto3.client('s3')
-            dynamodb = boto3.resource('dynamodb')
+            dynamodb = boto3.resource('dynamodb')          
+            sfn = boto3.client('stepfunctions')
 
             def lambda_handler(event, context):
               source_bucket = event['Records'][0]['s3']['bucket']['name']
@@ -55,18 +65,12 @@ Resources:
                 waiter.wait(Bucket=source_bucket, Key=source_key)             
 
                 # print("Putting item into DynamoDB")
-                source_url = metadata['source'] if 'source' in metadata else '',
-                                
+                
                 new_item = {
                     'id': file_id,
                     's3key': source_key,
                     'owner': userid
                   }
-                if isinstance(source_url, tuple):
-                  source_url = source_url[0]
-                if source_url:
-                  new_item['source'] = source_url
-
                 
                 table = dynamodb.Table(target_ddb_table)
                 table.put_item(
@@ -75,6 +79,17 @@ Resources:
                 response = {
                   "result": 0
                 }
+
+                # print("Starting Transcribe Job State Machine")
+                sfc_event = {
+                  'file_id': file_id
+                }
+                sfn_response = sfn.start_execution(
+                  stateMachineArn='${SRTGeneratorStateMachine}',
+                  name=file_id,
+                  input=json.dumps(sfc_event)
+                )
+
                 return {
                   "statusCode": 200,
                   "body": json.dumps(response),
@@ -84,7 +99,7 @@ Resources:
                 print(e)
                 # raise e
 
-          - { TargetDDBTableName: !Ref TargetDDBTableName}
+          - { TargetDDBTableName: !Ref TargetDDBTableName, LanguageCode: !Ref LanguageCode, SRTGeneratorStateMachine: !Ref SRTGeneratorStateMachine }
       Timeout: 30
       Runtime: python3.7
   
@@ -127,6 +142,10 @@ Resources:
               Resource: !Sub "arn:aws:s3:::${UploadBucketName}"
             - Effect: Allow
               Action:
+                - 'states:StartExecution'
+              Resource: !Ref SRTGeneratorStateMachine
+            - Effect: Allow
+              Action:
                 - 'dynamodb:PutItem'
               Resource: !Sub "arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TargetDDBTableName}"
             - Effect: Allow
@@ -166,7 +185,7 @@ Resources:
                   - 'logs:CreateLogStream'
                   - 'logs:PutLogEvents'
                 Resource: 'arn:aws:logs:*:*:*'
-
+  
   CustomResourceLambdaFunction:
     Type: 'AWS::Lambda::Function'
     Properties:
@@ -243,4 +262,312 @@ Resources:
                 print("Delete request completed....")
       Runtime: python3.7
       Timeout: 50
-    
+  
+  SRTGeneratorStateMachine:
+    Type: AWS::StepFunctions::StateMachine
+    Properties:
+      RoleArn: !GetAtt SRTGeneratorStateMachineRole.Arn
+      DefinitionString:
+        !Sub
+          - |-
+            {
+              "StartAt": "TranscribeJobStart",
+              "States": {
+                "TranscribeJobStart": {
+                  "Type": "Task",
+                  "Resource": "${TranscribeJobStartLambdaArn}",
+                  "Next": "TranscribeJobWait"
+                },
+                 "TranscribeJobWait": {
+                  "Type": "Wait",
+                  "Seconds": 30,
+                  "Next": "TranscribeJobStatus"
+                },
+                "TranscribeJobStatus": {
+                  "Type": "Task",
+                  "Resource": "${TranscribeJobStatusLambdaArn}",
+                  "Next": "IsExportFinished"
+                },
+                "IsTranscribeJobFinished": {
+                  "Type": "Choice",
+                  "Default": "TranscribeJobWait",
+                  "Choices": [
+                    {
+                      "Variable": "$.TranscriptionJobStatus",
+                      "StringEquals": "FAILED",
+                      "Next": "TranscribeJobFailed"
+                    },
+                    {
+                      "Variable": "$.TranscriptionJobStatus",
+                      "StringEquals": "COMPLETED",
+                      "Next": "SRTConversion"
+                    }
+                  ]
+                },
+                 "TranscribeJobFailed": {
+                  "Type": "Fail",
+                  "Cause": "Transcribe Job failed",
+                  "Error": "Transcribe Job failed"
+                },
+                "SRTConversion": {
+                  "Type": "Task",
+                  "Resource": "${SRTConversionLambdaArn}",
+                  "Next": "SRTConversionEnd"
+                },
+                "SRTConversionEnd": {
+                  "Type": "Pass",
+                  "End": true
+                }
+              }
+            }
+          - {TranscribeJobStartLambdaArn: !GetAtt TranscribeJobStartLambda.Arn, TranscribeJobStatusLambdaArn: !GetAtt TranscribeJobStatusLambda.Arn, SRTConversionLambdaArn: !GetAtt SRTConversionLambda.Arn}
+
+  SRTGeneratorStateMachineRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          -
+            Effect: "Allow"
+            Principal:
+              Service:
+                - "states.amazonaws.com"
+            Action:
+              - "sts:AssumeRole"
+      Path: "/"
+      Policies:
+        -
+          PolicyName: "root"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              -
+                Effect: "Allow"
+                Action: "lambda:InvokeFunction"
+                Resource:                  
+                  - !GetAtt TranscribeJobStartLambda.Arn
+                  - !GetAtt TranscribeJobQueryStatusLambda.Arn                  
+                  - !GetAtt UpdateCampaignStatusLambda.Arn
+
+  TranscribeJobStartLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      Description: Create Transcribe Job
+      Handler: index.lambda_handler
+      Role: !GetAtt SRTGeneratorLambdaExecutionRole.Arn
+      Code:
+        ZipFile: !Sub
+          - |
+            import json
+            import boto3
+
+            transcribe = boto3.client('transcribe')
+
+            def lambda_handler(event, context):
+              try:
+                file_id = event['file_id']
+                job_response = transcribe.start_transcription_job(
+                  TranscriptionJobName='file_id',
+                  LanguageCode='${LanguageCode}',
+                  Media={
+                    'MediaFileUri': 's3://%s/%s' % (source_bucket, source_key)
+                  }
+                )
+                return {
+                  "TranscriptionJobName": job_response['TranscriptionJob']['TranscriptionJobName']
+                  "TranscribeJobStatus": job_response['TranscriptionJob']['TranscriptionJobStatus']
+                }
+              except Exception as e:
+                print(e)
+      Timeout: 30
+      Runtime: python3.7
+
+  TranscribeJobStatusLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      Description: Check Transcribe Job
+      Handler: index.lambda_handler
+      Role: !GetAtt SRTGeneratorLambdaExecutionRole.Arn
+      Code:
+        ZipFile: !Sub
+          - |
+            import json
+            import boto3
+
+            transcribe = boto3.client('transcribe')
+
+            def lambda_handler(event, context):
+              try:
+                job_name = event['TranscriptionJobName']
+                job_response = transcribe.get_transcription_job(
+                  TranscriptionJobName=job_name
+                )
+                return {                  
+                  "TranscribeJobStatus": job_response['TranscriptionJob']['TranscriptionJobStatus']
+                }
+              except Exception as e:
+                print(e)
+      Timeout: 30
+      Runtime: python3.7
+  
+  SRTConversionLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      Description: Check Transcribe Job
+      Handler: index.lambda_handler
+      Role: !GetAtt SRTGeneratorLambdaExecutionRole.Arn
+      Code:
+        ZipFile: !Sub
+          - |
+            class Helpers
+            {
+                constructor()
+                {
+                    function padString(string, length) {
+                        return (new Array(length + 1).join('0') + string).slice(-length);
+                    }
+
+                    this.secondsToMinutes = function(seconds)
+                    {
+                        var hours = 0;
+                        var minutes = 0;
+                        hours = Math.floor(seconds / 3600);
+                        seconds = seconds - (hours * 3600);
+                        minutes = Math.floor(seconds / 60);
+                        seconds = (seconds - (minutes * 60)).toFixed(3);
+                
+                        var response = padString(hours, 2) + ':' + padString(minutes, 2) + ':' + padString(seconds, 6);
+                        return response;
+                    }
+                }
+            }
+            class SrtConvert
+            {
+                constructor()
+                {
+                }
+
+                convertFile(file)
+                {
+                    let convertedOutput = '';
+                    let subtitleIndex = 1;
+
+                    const json = JSON.parse(file);
+                
+                    let current_start = json.results.items[0].start_time;
+                    let formatted_start;
+                    let formatted_end;
+                    let nextline = '';
+                    let reset = false;
+
+                    async.eachOf(json.results.items, function(item, index) {
+                        if (item.type == 'punctuation') {
+                            nextline = nextline.slice(0, -1); //Remove the space before punctuation
+                            nextline += item.alternatives[0].content;
+                            formatted_start = helpers.secondsToMinutes(current_start);
+                            formatted_end = helpers.secondsToMinutes(json.results.items[index - 1].end_time);
+                            convertedOutput += `${subtitleIndex++}\n`
+                            convertedOutput += formatted_start + ' --> ' + formatted_end + '\n';
+                            convertedOutput += nextline + '\n\n';
+                            nextline = '';
+                            let nextItem = json.results.items[index + 1];
+                            if (nextItem) {
+                                current_start = json.results.items[index + 1].start_time;
+                            }
+                        } else if (item.end_time - current_start > 5) {
+                            formatted_start = helpers.secondsToMinutes(current_start);
+                            formatted_end = helpers.secondsToMinutes(json.results.items[index - 1].end_time);
+                            convertedOutput += `${subtitleIndex++}\n`
+                            convertedOutput += formatted_start + ' --> ' + formatted_end + '\n';
+                            convertedOutput += nextline + '\n\n';
+                            nextline = item.alternatives[0].content + ' ';
+                            current_start = item.start_time;;
+                        } else {
+                            nextline += item.alternatives[0].content + '';
+                        }
+
+                    })
+
+                    formatted_start = helpers.secondsToMinutes(current_start);
+                    if (json.results.items[json.results.items.length - 1].type != 'punctuation') {
+                        formatted_end = helpers.secondsToMinutes(json.results.items[json.results.items.length - 1].end_time);
+                    } else {
+                        formatted_end = helpers.secondsToMinutes(json.results.items[json.results.items.length - 2].end_time);
+                    }
+
+                    if (nextline) {
+                        convertedOutput += `${subtitleIndex++}\n`
+                        convertedOutput += formatted_start + ' --> ' + formatted_end + '\n';
+                        convertedOutput += nextline; //Add any leftover words to the end
+                    }
+                    
+                    return convertedOutput;
+                }
+            }
+            const fs = require('fs')
+            const async = require('async');
+
+            
+            const srtConvert = new SrtConvert();
+            exports.handler = async (event) => {
+                let sourcePath = event[''] /// TODO Fix this
+                let destinationPath = '/tmp/output.srt';
+
+                if (process.argv[2] && fs.existsSync(process.argv[2]))
+                {
+                    sourcePath = process.argv[2];
+                    if (process.argv[3])
+                    {
+                        destinationPath = process.argv[3];
+                    }
+                } else {
+                    const express = require('express');
+                    const app = express();
+                    const prompt = require('prompt-sync')();
+                    app.use(express.static('output'))
+                    var path = prompt('Please provide the location of the Transcribe output: ');
+                }
+
+                fs.readFile(sourcePath, 'utf8', (err, file) => {
+                    if (err) {
+                        console.log(err);
+                        return {
+                            Error: 'errir'
+                          }
+                    }
+                    const convertedOutput = srtConvert.convertFile(file);
+                    fs.writeFile(destinationPath, convertedOutput, (err) => {
+                        if (err) {                        
+                          return {
+                            Error: 'errir'
+                          }
+                        }
+                    });
+                })
+            }
+      Timeout: 120
+      Runtime: "nodejs12.x"
+
+  
+  SRTGeneratorLambdaExecutionRole
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal: {Service: [lambda.amazonaws.com]}
+          Action: ['sts:AssumeRole']
+      Path: /
+      ManagedPolicyArns:
+      - "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+      Policies:
+      - PolicyName: S3DDBPolicy
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action:
+                - 'transcribe:*'
+              Resource: "*"
