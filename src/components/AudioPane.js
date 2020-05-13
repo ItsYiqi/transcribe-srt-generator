@@ -1,4 +1,5 @@
-import React from 'react'
+import React, { useEffect } from 'react';
+
 import { API, graphqlOperation, Analytics } from 'aws-amplify';
 
 import { emphasize, makeStyles, useTheme } from "@material-ui/core/styles";
@@ -44,7 +45,7 @@ function AudioPane(props) {
   const theme = useTheme();
 
   const { userid } = props;
-  
+
   const [audios, setAudios] = React.useState(null);
   const [isLoading, setIsLoading] = React.useState(false);
 
@@ -57,28 +58,34 @@ function AudioPane(props) {
       setIsLoading(false);
       setAudios(results.data.listAudios.items);
     } catch (err) {
-      console.error(err);
-      // window.location.reload();
+      console.error(err);      
     }
   };
 
-  const onUploadComplete = () => {
-    enqueueSnackbar('Processing uploaded file...', { variant: 'info' });
+  useEffect(() => {
     handleLoadAll()
+  }, []);
+
+  const onUploadComplete = () => {
+    enqueueSnackbar('Processing uploaded file...', { variant: 'info' });    
+    setTimeout(function () {
+      enqueueSnackbar('File is uploaded', { variant: 'success' });
+      handleLoadAll()
+    }, 5000);
   }
 
   return (
     <div className={classes.root}>
-      <div>        
-        <FileUploader onComplete={onUploadComplete} userid={userid}/>
+      <div>
+        <FileUploader onComplete={onUploadComplete} userid={userid} />
       </div>
       {isLoading ?
-          <CircularProgress className={classes.progress} />
-          : (
-            audios && audios.length > 0 ?
-              <AudioGrid audios={audios} />
-              : 'No record found'
-          )
+        <CircularProgress className={classes.progress} />
+        : (
+          audios && audios.length > 0 ?
+            <AudioGrid audios={audios} />
+            : 'No record found'
+        )
       }
 
     </div>

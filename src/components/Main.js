@@ -110,58 +110,48 @@ function Main(props) {
         setAnchorEl(null);
     }
 
-    return (
-        <Connect
-            query={graphqlOperation(queries.listAudios, { limit: 500 })}
-        >
-            {
-                ({ data: { listAudios }, loading, error }) => {
-                    return (
-                        <div className={classes.root}>
-                            <AppBar position="static" className={classes.appbar}>
-                                <Toolbar>
-                                    <IconButton edge="start" className={classes.menuButton} color="inherit" aria-label="menu" onClick={handleMenuClick}>
-                                        <MenuIcon />
-                                    </IconButton>
-                                    <Menu
-                                        id="simple-menu"
-                                        anchorEl={anchorEl}
-                                        keepMounted
-                                        open={Boolean(anchorEl)}
-                                        onClose={handleClose}
-                                    >
 
-                                        <MenuItem onClick={signout}>Logout</MenuItem>
-                                    </Menu>
-                                    <img
-                                        src={logo}
-                                        alt="SRT Generator"
-                                        className={classes.logo}
-                                    />
-                                    <Typography variant="h6" className={classes.title}>
-                                        SRT Generator
+    return (
+        <div className={classes.root}>
+            <AppBar position="static" className={classes.appbar}>
+                <Toolbar>
+                    <IconButton edge="start" className={classes.menuButton} color="inherit" aria-label="menu" onClick={handleMenuClick}>
+                        <MenuIcon />
+                    </IconButton>
+                    <Menu
+                        id="simple-menu"
+                        anchorEl={anchorEl}
+                        keepMounted
+                        open={Boolean(anchorEl)}
+                        onClose={handleClose}
+                    >
+
+                        <MenuItem onClick={signout}>Logout</MenuItem>
+                    </Menu>
+                    <img
+                        src={logo}
+                        alt="SRT Generator"
+                        className={classes.logo}
+                    />
+                    <Typography variant="h6" className={classes.title}>
+                        SRT Generator
                     </Typography>
                     Hello {username}
-                                </Toolbar>
-                                <Tabs
-                                    value={value}
-                                    onChange={handleChange}
-                                    aria-label=""
-                                    indicatorColor="primary"
-                                >
-                                    <Tab label="Files" {...a11yProps(0)} />
+                </Toolbar>
+                <Tabs
+                    value={value}
+                    onChange={handleChange}
+                    aria-label=""
+                    indicatorColor="primary"
+                >
+                    <Tab label="Files" {...a11yProps(0)} />
 
-                                </Tabs>
-                            </AppBar>
-                            <TabPanel value={value} index={0}>
-                                <AudioPane tags={listAudios?.items} userid={userid} />
-                            </TabPanel>
-                        </div>
-                    )
-                }
-            }
-
-        </Connect>
+                </Tabs>
+            </AppBar>
+            <TabPanel value={value} index={0}>
+                <AudioPane userid={userid} />
+            </TabPanel>
+        </div>
     )
 }
 

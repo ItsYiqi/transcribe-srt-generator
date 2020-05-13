@@ -117,7 +117,7 @@ function AudioCard(props) {
           <Card className={classes.card}>
             <CardContent>
               <Typography variant="body2" color="textSecondary" component="div">
-                {audio.id}
+                {audio.s3key.replace(/^.*[\\\/]/, '')}
               </Typography>
                 
             </CardContent>
