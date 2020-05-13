@@ -1,0 +1,246 @@
+Description: Upload an object to an S3 bucket, triggering a Lambda event, returning the object key as a Stack Output.
+Parameters:
+  UploadBucketName:
+    Description: S3 Bucket for user uploading
+    Type: String
+  TargetDDBTableName:
+    Description: DDB table name
+    Type: String
+
+Resources:
+  SourceBucketPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: 'lambda:InvokeFunction'
+      FunctionName: !Ref FileWatcher
+      Principal: s3.amazonaws.com
+      SourceAccount: !Ref "AWS::AccountId"
+      SourceArn: !Sub "arn:aws:s3:::${UploadBucketName}"
+  
+  FileWatcher:
+    Type: AWS::Lambda::Function
+    Properties:
+      Description: Copy source image to target bucket whilst creating record in Target DDB table
+      Handler: index.lambda_handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Code:
+        ZipFile: !Sub
+          - |
+            import json
+            import boto3
+            import time
+            import urllib
+            import uuid
+            import os
+            
+            s3 = boto3.client('s3')
+            dynamodb = boto3.resource('dynamodb')
+
+            def lambda_handler(event, context):
+              source_bucket = event['Records'][0]['s3']['bucket']['name']
+              source_key = urllib.parse.unquote_plus(event['Records'][0]['s3']['object']['key'])              
+              source_filename, source_file_extension = os.path.splitext(source_key)              
+              
+              userid = os.path.basename(os.path.normpath(os.path.dirname(source_key)))
+
+              file_id = str(uuid.uuid4())
+
+              target_ddb_table = '${TargetDDBTableName}'
+
+              try:
+                # print("Waiting for the file persist in the source bucket")
+                response = s3.head_object(Bucket=source_bucket, Key=source_key)
+                metadata = response['Metadata']
+                waiter = s3.get_waiter('object_exists')
+                waiter.wait(Bucket=source_bucket, Key=source_key)             
+
+                # print("Putting item into DynamoDB")
+                source_url = metadata['source'] if 'source' in metadata else '',
+                                
+                new_item = {
+                    'id': file_id,
+                    's3key': source_key           
+                    'owner': userid
+                  }
+                if isinstance(source_url, tuple):
+                  source_url = source_url[0]
+                if source_url:
+                  new_item['source'] = source_url
+
+                
+                table = dynamodb.Table(target_ddb_table)
+                table.put_item(
+                  Item=new_item
+                )               
+                response = {
+                  "result": 0
+                }
+                return {
+                  "statusCode": 200,
+                  "body": json.dumps(response),
+                }
+
+              except Exception as e:
+                print(e)
+                # raise e
+
+          - { TargetDDBTableName: !Ref TargetDDBTableName}
+      Timeout: 30
+      Runtime: python3.7
+  
+  LambdaTrigger:
+    Type: 'Custom::LambdaTrigger'
+    DependsOn: SourceBucketPermission
+    Properties:
+      ServiceToken: !GetAtt CustomResourceLambdaFunction.Arn
+      LambdaArn: !GetAtt FileWatcher.Arn
+      Bucket: !Ref UploadBucketName
+
+  
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal: {Service: [lambda.amazonaws.com]}
+          Action: ['sts:AssumeRole']
+      Path: /
+      ManagedPolicyArns:
+      - "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+      Policies:
+      - PolicyName: S3DDBPolicy
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action:
+                - 's3:PutObject'
+                - 's3:DeleteObject'
+                - 's3:GetObject'
+                - 's3:GetObjectVersion'
+              Resource: !Sub "arn:aws:s3:::${UploadBucketName}/*"
+            - Effect: Allow
+              Action:
+                - 's3:ListBucket'
+              Resource: !Sub "arn:aws:s3:::${UploadBucketName}"
+            - Effect: Allow
+              Action:
+                - 'dynamodb:PutItem'
+              Resource: !Sub "arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TargetDDBTableName}"
+            - Effect: Allow
+              Action:                
+                - 'dynamodb:DescribeStream'
+                - 'dynamodb:GetRecords'
+                - 'dynamodb:GetShardIterator'
+                - 'dynamodb:ListStreams'
+              Resource: "*"
+  
+  CustomResourceLambdaIAMRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Path: /
+      Policies:
+        - PolicyName: root
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 's3:GetBucketNotification'
+                  - 's3:PutBucketNotification'
+                Resource: !Sub 'arn:aws:s3:::${UploadBucketName}'
+              - Effect: Allow
+                Action:
+                  - 'logs:CreateLogGroup'
+                  - 'logs:CreateLogStream'
+                  - 'logs:PutLogEvents'
+                Resource: 'arn:aws:logs:*:*:*'
+
+  CustomResourceLambdaFunction:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      Handler: index.lambda_handler
+      Role: !GetAtt CustomResourceLambdaIAMRole.Arn
+      Code:
+        ZipFile: |
+
+            from __future__ import print_function
+            import json
+            import boto3
+            import cfnresponse
+            
+            SUCCESS = "SUCCESS"
+            FAILED = "FAILED"
+            
+            print('Loading function')
+            s3 = boto3.resource('s3')
+            
+            def lambda_handler(event, context):
+                print("Received event: " + json.dumps(event, indent=2))
+                responseData={}
+                try:
+                    if event['RequestType'] == 'Delete':
+                        print("Request Type:",event['RequestType'])
+                        Bucket=event['ResourceProperties']['Bucket']
+                        delete_notification(Bucket)
+                        print("Sending response to custom resource after Delete")
+                    elif event['RequestType'] == 'Create' or event['RequestType'] == 'Update':
+                        print("Request Type:",event['RequestType'])
+                        LambdaArn=event['ResourceProperties']['LambdaArn']
+                        Bucket=event['ResourceProperties']['Bucket']
+                        add_notification(LambdaArn, Bucket)
+                        responseData={'Bucket':Bucket}
+                        print("Sending response to custom resource")
+                    responseStatus = 'SUCCESS'
+                except Exception as e:
+                    print('Failed to process:', e)
+                    responseStatus = 'FAILURE'
+                    responseData = {'Failure': 'Something bad happened.'}
+                cfnresponse.send(event, context, responseStatus, responseData)
+
+            def add_notification(LambdaArn, Bucket):
+                bucket_notification = s3.BucketNotification(Bucket)
+                response = bucket_notification.put(
+                  NotificationConfiguration={
+                    'LambdaFunctionConfigurations': [
+                      {
+                          'LambdaFunctionArn': LambdaArn,
+                          'Events': [
+                              's3:ObjectCreated:*'
+                          ],
+                          'Filter': {
+                            'Key': {
+                              'FilterRules': [
+                                {
+                                  'Name': 'prefix',
+                                  'Value': 'uploads/'
+                                }
+                              ]
+                            }
+                          }
+                      }
+                    ]
+                  }
+                )
+                print("Put request completed....")
+              
+            def delete_notification(Bucket):
+                bucket_notification = s3.BucketNotification(Bucket)
+                response = bucket_notification.put(
+                    NotificationConfiguration={}
+                )
+                print("Delete request completed....")
+      Runtime: python3.7
+      Timeout: 50
+    
