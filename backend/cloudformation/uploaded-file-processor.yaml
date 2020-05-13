@@ -59,7 +59,7 @@ Resources:
                                 
                 new_item = {
                     'id': file_id,
-                    's3key': source_key           
+                    's3key': source_key,
                     'owner': userid
                   }
                 if isinstance(source_url, tuple):
