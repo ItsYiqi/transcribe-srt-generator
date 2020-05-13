@@ -550,7 +550,7 @@ Resources:
       Runtime: "nodejs12.x"
 
   
-  SRTGeneratorLambdaExecutionRole
+  SRTGeneratorLambdaExecutionRole:
     Type: AWS::IAM::Role
     Properties:
       AssumeRolePolicyDocument:
