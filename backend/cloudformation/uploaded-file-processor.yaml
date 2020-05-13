@@ -191,6 +191,8 @@ Resources:
     Properties:
       Handler: index.lambda_handler
       Role: !GetAtt CustomResourceLambdaIAMRole.Arn
+      Runtime: python3.7
+      Timeout: 50
       Code:
         ZipFile: |
             from __future__ import print_function
@@ -259,8 +261,214 @@ Resources:
                     NotificationConfiguration={}
                 )
                 print("Delete request completed....")
+      
+
+  TranscribeJobStartLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      Description: Create Transcribe Job
+      Handler: index.lambda_handler
+      Role: !GetAtt SRTGeneratorLambdaExecutionRole.Arn
+      Timeout: 30
       Runtime: python3.7
-      Timeout: 50
+      Code:
+        ZipFile: |
+            import json
+            import boto3
+
+            transcribe = boto3.client('transcribe')
+
+            def lambda_handler(event, context):
+              try:
+                file_id = event['file_id']
+                job_response = transcribe.start_transcription_job(
+                  TranscriptionJobName='file_id',
+                  LanguageCode='${LanguageCode}',
+                  Media={
+                    'MediaFileUri': 's3://%s/%s' % (source_bucket, source_key)
+                  }
+                )
+                return {
+                  "TranscriptionJobName": job_response['TranscriptionJob']['TranscriptionJobName']
+                  "TranscribeJobStatus": job_response['TranscriptionJob']['TranscriptionJobStatus']
+                }
+              except Exception as e:
+                print(e)
+      
+
+  TranscribeJobStatusLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      Description: Check Transcribe Job
+      Handler: index.lambda_handler
+      Role: !GetAtt SRTGeneratorLambdaExecutionRole.Arn
+      Timeout: 30
+      Runtime: python3.7
+      Code:
+        ZipFile: |
+            import json
+            import boto3
+
+            transcribe = boto3.client('transcribe')
+
+            def lambda_handler(event, context):
+              try:
+                job_name = event['TranscriptionJobName']
+                job_response = transcribe.get_transcription_job(
+                  TranscriptionJobName=job_name
+                )
+                return {                  
+                  "TranscribeJobStatus": job_response['TranscriptionJob']['TranscriptionJobStatus']
+                }
+              except Exception as e:
+                print(e)
+      
+  
+  SRTConversionLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      Description: Convert json file from Transcribe to SRT format
+      Handler: index.handler
+      Role: !GetAtt SRTGeneratorLambdaExecutionRole.Arn
+      Timeout: 120
+      Runtime: nodejs12.x
+      Code:
+        ZipFile: !Sub
+          - |
+              const fs = require('fs');
+              const async = require('async');
+              class Helpers
+              {
+                constructor()
+                {
+                  function padString(string, length) {
+                    return (new Array(length + 1).join('0') + string).slice(-length);
+                  }
+
+                  this.secondsToMinutes = function(seconds)
+                  {
+                    var hours = 0;
+                    var minutes = 0;
+                    hours = Math.floor(seconds / 3600);
+                    seconds = seconds - (hours * 3600);
+                    minutes = Math.floor(seconds / 60);
+                    seconds = (seconds - (minutes * 60)).toFixed(3);
+            
+                    var response = padString(hours, 2) + ':' + padString(minutes, 2) + ':' + padString(seconds, 6);
+                    return response;
+                  }
+                }
+              }
+              class SrtConvert
+              {
+                constructor()
+                {
+                }
+
+                convertFile(file)
+                {
+                  let convertedOutput = '';
+                  let subtitleIndex = 1;
+
+                  const json = JSON.parse(file);
+              
+                  let current_start = json.results.items[0].start_time;
+                  let formatted_start;
+                  let formatted_end;
+                  let nextline = '';
+                  let reset = false;
+
+                  async.eachOf(json.results.items, function(item, index) {
+                    if (item.type == 'punctuation') {
+                      nextline = nextline.slice(0, -1); //Remove the space before punctuation
+                      nextline += item.alternatives[0].content;
+                      formatted_start = helpers.secondsToMinutes(current_start);
+                      formatted_end = helpers.secondsToMinutes(json.results.items[index - 1].end_time);
+                      convertedOutput += (subtitleIndex++) + '\n'
+                      convertedOutput += formatted_start + ' --> ' + formatted_end + '\n';
+                      convertedOutput += nextline + '\n\n';
+                      nextline = '';
+                      let nextItem = json.results.items[index + 1];
+                      if (nextItem) {
+                        current_start = json.results.items[index + 1].start_time;
+                      }
+                    } else if (item.end_time - current_start > 5) {
+                      formatted_start = helpers.secondsToMinutes(current_start);
+                      formatted_end = helpers.secondsToMinutes(json.results.items[index - 1].end_time);
+                      convertedOutput += (subtitleIndex++) + '\n'
+                      convertedOutput += formatted_start + ' --> ' + formatted_end + '\n';
+                      convertedOutput += nextline + '\n\n';
+                      nextline = item.alternatives[0].content + ' ';
+                      current_start = item.start_time;
+                    } else {
+                      nextline += item.alternatives[0].content + '';
+                    }
+
+                  })
+
+                  formatted_start = helpers.secondsToMinutes(current_start);
+                  if (json.results.items[json.results.items.length - 1].type != 'punctuation') {
+                    formatted_end = helpers.secondsToMinutes(json.results.items[json.results.items.length - 1].end_time);
+                  } else {
+                    formatted_end = helpers.secondsToMinutes(json.results.items[json.results.items.length - 2].end_time);
+                  }
+
+                  if (nextline) {
+                    convertedOutput += (subtitleIndex++) + '\n'
+                    convertedOutput += formatted_start + ' --> ' + formatted_end + '\n';
+                    convertedOutput += nextline; //Add any leftover words to the end
+                  }
+                  
+                  return convertedOutput;
+                }
+              }
+                          
+              const srtConvert = new SrtConvert();
+              exports.handler = async (event) => {
+                let sourcePath = event[''] /// TODO Fix this
+                let destinationPath = '/tmp/output.srt';      
+                let targetBucket = '${TargetBucket}'       
+
+                fs.readFile(sourcePath, 'utf8', (err, file) => {
+                  if (err) {
+                    console.log(err);
+                    return {
+                      Error: 'error'
+                    }
+                  }
+                  const convertedOutput = srtConvert.convertFile(file);
+                  fs.writeFile(destinationPath, convertedOutput, (err) => {
+                    if (err) {                        
+                      return {
+                        Error: 'error'
+                      }
+                    }
+                  });
+                })
+              }
+          - { TargetBucket: !Ref UploadBucketName}
+
+  SRTGeneratorLambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal: {Service: [lambda.amazonaws.com]}
+          Action: ['sts:AssumeRole']
+      Path: /
+      ManagedPolicyArns:
+      - "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+      Policies:
+      - PolicyName: S3DDBPolicy
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action:
+                - 'transcribe:*'
+              Resource: "*"
   
   SRTGeneratorStateMachine:
     Type: AWS::StepFunctions::StateMachine
@@ -285,7 +493,7 @@ Resources:
                 "TranscribeJobStatus": {
                   "Type": "Task",
                   "Resource": "${TranscribeJobStatusLambdaArn}",
-                  "Next": "IsExportFinished"
+                  "Next": "IsTranscribeJobFinished"
                 },
                 "IsTranscribeJobFinished": {
                   "Type": "Choice",
@@ -349,224 +557,4 @@ Resources:
                   - !GetAtt TranscribeJobStatusLambda.Arn                  
                   - !GetAtt SRTConversionLambda.Arn
 
-  TranscribeJobStartLambda:
-    Type: AWS::Lambda::Function
-    Properties:
-      Description: Create Transcribe Job
-      Handler: index.lambda_handler
-      Role: !GetAtt SRTGeneratorLambdaExecutionRole.Arn
-      Code:
-        ZipFile:
-          - |
-            import json
-            import boto3
-
-            transcribe = boto3.client('transcribe')
-
-            def lambda_handler(event, context):
-              try:
-                file_id = event['file_id']
-                job_response = transcribe.start_transcription_job(
-                  TranscriptionJobName='file_id',
-                  LanguageCode='${LanguageCode}',
-                  Media={
-                    'MediaFileUri': 's3://%s/%s' % (source_bucket, source_key)
-                  }
-                )
-                return {
-                  "TranscriptionJobName": job_response['TranscriptionJob']['TranscriptionJobName']
-                  "TranscribeJobStatus": job_response['TranscriptionJob']['TranscriptionJobStatus']
-                }
-              except Exception as e:
-                print(e)
-      Timeout: 30
-      Runtime: python3.7
-
-  TranscribeJobStatusLambda:
-    Type: AWS::Lambda::Function
-    Properties:
-      Description: Check Transcribe Job
-      Handler: index.lambda_handler
-      Role: !GetAtt SRTGeneratorLambdaExecutionRole.Arn
-      Code:
-        ZipFile: 
-          - |
-            import json
-            import boto3
-
-            transcribe = boto3.client('transcribe')
-
-            def lambda_handler(event, context):
-              try:
-                job_name = event['TranscriptionJobName']
-                job_response = transcribe.get_transcription_job(
-                  TranscriptionJobName=job_name
-                )
-                return {                  
-                  "TranscribeJobStatus": job_response['TranscriptionJob']['TranscriptionJobStatus']
-                }
-              except Exception as e:
-                print(e)
-      Timeout: 30
-      Runtime: python3.7
-  
-  SRTConversionLambda:
-    Type: AWS::Lambda::Function
-    Properties:
-      Description: Check Transcribe Job
-      Handler: index.lambda_handler
-      Role: !GetAtt SRTGeneratorLambdaExecutionRole.Arn
-      Code:
-        ZipFile: 
-          - |
-            class Helpers
-            {
-                constructor()
-                {
-                    function padString(string, length) {
-                        return (new Array(length + 1).join('0') + string).slice(-length);
-                    }
-
-                    this.secondsToMinutes = function(seconds)
-                    {
-                        var hours = 0;
-                        var minutes = 0;
-                        hours = Math.floor(seconds / 3600);
-                        seconds = seconds - (hours * 3600);
-                        minutes = Math.floor(seconds / 60);
-                        seconds = (seconds - (minutes * 60)).toFixed(3);
-                
-                        var response = padString(hours, 2) + ':' + padString(minutes, 2) + ':' + padString(seconds, 6);
-                        return response;
-                    }
-                }
-            }
-            class SrtConvert
-            {
-                constructor()
-                {
-                }
-
-                convertFile(file)
-                {
-                    let convertedOutput = '';
-                    let subtitleIndex = 1;
-
-                    const json = JSON.parse(file);
-                
-                    let current_start = json.results.items[0].start_time;
-                    let formatted_start;
-                    let formatted_end;
-                    let nextline = '';
-                    let reset = false;
-
-                    async.eachOf(json.results.items, function(item, index) {
-                        if (item.type == 'punctuation') {
-                            nextline = nextline.slice(0, -1); //Remove the space before punctuation
-                            nextline += item.alternatives[0].content;
-                            formatted_start = helpers.secondsToMinutes(current_start);
-                            formatted_end = helpers.secondsToMinutes(json.results.items[index - 1].end_time);
-                            convertedOutput += `${subtitleIndex++}\n`
-                            convertedOutput += formatted_start + ' --> ' + formatted_end + '\n';
-                            convertedOutput += nextline + '\n\n';
-                            nextline = '';
-                            let nextItem = json.results.items[index + 1];
-                            if (nextItem) {
-                                current_start = json.results.items[index + 1].start_time;
-                            }
-                        } else if (item.end_time - current_start > 5) {
-                            formatted_start = helpers.secondsToMinutes(current_start);
-                            formatted_end = helpers.secondsToMinutes(json.results.items[index - 1].end_time);
-                            convertedOutput += `${subtitleIndex++}\n`
-                            convertedOutput += formatted_start + ' --> ' + formatted_end + '\n';
-                            convertedOutput += nextline + '\n\n';
-                            nextline = item.alternatives[0].content + ' ';
-                            current_start = item.start_time;;
-                        } else {
-                            nextline += item.alternatives[0].content + '';
-                        }
-
-                    })
-
-                    formatted_start = helpers.secondsToMinutes(current_start);
-                    if (json.results.items[json.results.items.length - 1].type != 'punctuation') {
-                        formatted_end = helpers.secondsToMinutes(json.results.items[json.results.items.length - 1].end_time);
-                    } else {
-                        formatted_end = helpers.secondsToMinutes(json.results.items[json.results.items.length - 2].end_time);
-                    }
-
-                    if (nextline) {
-                        convertedOutput += `${subtitleIndex++}\n`
-                        convertedOutput += formatted_start + ' --> ' + formatted_end + '\n';
-                        convertedOutput += nextline; //Add any leftover words to the end
-                    }
-                    
-                    return convertedOutput;
-                }
-            }
-            const fs = require('fs')
-            const async = require('async');
-
-            
-            const srtConvert = new SrtConvert();
-            exports.handler = async (event) => {
-                let sourcePath = event[''] /// TODO Fix this
-                let destinationPath = '/tmp/output.srt';
-
-                if (process.argv[2] && fs.existsSync(process.argv[2]))
-                {
-                    sourcePath = process.argv[2];
-                    if (process.argv[3])
-                    {
-                        destinationPath = process.argv[3];
-                    }
-                } else {
-                    const express = require('express');
-                    const app = express();
-                    const prompt = require('prompt-sync')();
-                    app.use(express.static('output'))
-                    var path = prompt('Please provide the location of the Transcribe output: ');
-                }
-
-                fs.readFile(sourcePath, 'utf8', (err, file) => {
-                    if (err) {
-                        console.log(err);
-                        return {
-                            Error: 'errir'
-                          }
-                    }
-                    const convertedOutput = srtConvert.convertFile(file);
-                    fs.writeFile(destinationPath, convertedOutput, (err) => {
-                        if (err) {                        
-                          return {
-                            Error: 'errir'
-                          }
-                        }
-                    });
-                })
-            }
-      Timeout: 120
-      Runtime: "nodejs12.x"
-
-  
-  SRTGeneratorLambdaExecutionRole:
-    Type: AWS::IAM::Role
-    Properties:
-      AssumeRolePolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-        - Effect: Allow
-          Principal: {Service: [lambda.amazonaws.com]}
-          Action: ['sts:AssumeRole']
-      Path: /
-      ManagedPolicyArns:
-      - "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
-      Policies:
-      - PolicyName: S3DDBPolicy
-        PolicyDocument:
-          Version: '2012-10-17'
-          Statement:
-            - Effect: Allow
-              Action:
-                - 'transcribe:*'
-              Resource: "*"
+ 
