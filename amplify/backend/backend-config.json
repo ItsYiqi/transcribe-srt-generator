@@ -1,0 +1,9 @@
+{
+	"auth": {
+		"transcribesrtgenc07c7542": {
+			"service": "Cognito",
+			"providerPlugin": "awscloudformation",
+			"dependsOn": []
+		}
+	}
+}
