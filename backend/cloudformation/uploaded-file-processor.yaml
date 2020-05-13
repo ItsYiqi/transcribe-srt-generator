@@ -193,7 +193,6 @@ Resources:
       Role: !GetAtt CustomResourceLambdaIAMRole.Arn
       Code:
         ZipFile: |
-
             from __future__ import print_function
             import json
             import boto3
@@ -347,8 +346,8 @@ Resources:
                 Action: "lambda:InvokeFunction"
                 Resource:                  
                   - !GetAtt TranscribeJobStartLambda.Arn
-                  - !GetAtt TranscribeJobQueryStatusLambda.Arn                  
-                  - !GetAtt UpdateCampaignStatusLambda.Arn
+                  - !GetAtt TranscribeJobStatusLambda.Arn                  
+                  - !GetAtt SRTConversionLambda.Arn
 
   TranscribeJobStartLambda:
     Type: AWS::Lambda::Function
@@ -357,7 +356,7 @@ Resources:
       Handler: index.lambda_handler
       Role: !GetAtt SRTGeneratorLambdaExecutionRole.Arn
       Code:
-        ZipFile: !Sub
+        ZipFile:
           - |
             import json
             import boto3
@@ -390,7 +389,7 @@ Resources:
       Handler: index.lambda_handler
       Role: !GetAtt SRTGeneratorLambdaExecutionRole.Arn
       Code:
-        ZipFile: !Sub
+        ZipFile: 
           - |
             import json
             import boto3
@@ -418,7 +417,7 @@ Resources:
       Handler: index.lambda_handler
       Role: !GetAtt SRTGeneratorLambdaExecutionRole.Arn
       Code:
-        ZipFile: !Sub
+        ZipFile: 
           - |
             class Helpers
             {
