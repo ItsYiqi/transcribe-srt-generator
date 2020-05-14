@@ -332,8 +332,9 @@ Resources:
                 event["TranscriptionJobName"] = job_response['TranscriptionJob']['TranscriptionJobName']
                 event["TranscriptionJobStatus"] = job_response['TranscriptionJob']['TranscriptionJobStatus']
 
-                if 'Transcript' in job_response:
-                  event['TranscriptFileUri'] = job_response['Transcript']['TranscriptFileUri']
+                if 'Transcript' in job_response['TranscriptionJob']:
+                  if 'TranscriptFileUri' in job_response['TranscriptionJob']['Transcript']:
+                    event['TranscriptFileUri'] = job_response['TranscriptionJob']['Transcript']['TranscriptFileUri']
 
                 return event
               except Exception as e:
