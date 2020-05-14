@@ -171,6 +171,12 @@ Resources:
                 - lambda.amazonaws.com
             Action:
               - 'sts:AssumeRole'
+          - Effect: Allow
+            Principal:
+              Service:
+                - transcribe.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
       Path: /
       Policies:
         - PolicyName: root
@@ -285,7 +291,7 @@ Resources:
             def lambda_handler(event, context):
               try:
                 file_id = event['file_id']
-                source_bucket=event['source_bucket']
+                source_bucket = event['source_bucket']
                 source_key=event['source_key']
                 job_response = transcribe.start_transcription_job(
                   TranscriptionJobName=file_id,
@@ -294,10 +300,9 @@ Resources:
                     'MediaFileUri': 's3://%s/%s' % (source_bucket, source_key)
                   }
                 )
-                return {
-                  "TranscriptionJobName": job_response['TranscriptionJob']['TranscriptionJobName'],
-                  "TranscribeJobStatus": job_response['TranscriptionJob']['TranscriptionJobStatus']
-                }
+                event["TranscriptionJobName"] = job_response['TranscriptionJob']['TranscriptionJobName']
+                event["TranscriptionJobStatus"] = job_response['TranscriptionJob']['TranscriptionJobStatus']
+                return event
               except Exception as e:
                 print(e)
           - { LanguageCode: !Ref LanguageCode }
@@ -324,13 +329,13 @@ Resources:
                 job_response = transcribe.get_transcription_job(
                   TranscriptionJobName=job_name
                 )
-                result = {                  
-                  "TranscribeJobStatus": job_response['TranscriptionJob']['TranscriptionJobStatus']
-                }
-                if 'Transcript' in job_response:
-                  result['TranscriptFileUri'] = job_response['Transcript']['TranscriptFileUri']
+                event["TranscriptionJobName"] = job_response['TranscriptionJob']['TranscriptionJobName']
+                event["TranscriptionJobStatus"] = job_response['TranscriptionJob']['TranscriptionJobStatus']
 
-                return result
+                if 'Transcript' in job_response:
+                  event['TranscriptFileUri'] = job_response['Transcript']['TranscriptFileUri']
+
+                return event
               except Exception as e:
                 print(e)
       
@@ -347,10 +352,9 @@ Resources:
         ZipFile: !Sub
           - |
               const fs = require('fs');
-              const http = require('http');
-              const async = require('async');
+              const https = require('https');
+              const AWS = require('aws-sdk');
               var s3 = new AWS.S3();
-
               class Helpers
               {
                 constructor()
@@ -367,12 +371,13 @@ Resources:
                     seconds = seconds - (hours * 3600);
                     minutes = Math.floor(seconds / 60);
                     seconds = (seconds - (minutes * 60)).toFixed(3);
-            
+
                     var response = padString(hours, 2) + ':' + padString(minutes, 2) + ':' + padString(seconds, 6);
                     return response;
                   }
                 }
               }
+              const helpers = new Helpers();
               class SrtConvert
               {
                 constructor()
@@ -385,22 +390,20 @@ Resources:
                   let subtitleIndex = 1;
 
                   const json = JSON.parse(file);
-              
+
                   let current_start = json.results.items[0].start_time;
                   let formatted_start;
                   let formatted_end;
                   let nextline = '';
                   let reset = false;
 
-                  async.eachOf(json.results.items, function(item, index) {
+                  json.results.items.map((item, index) => {
                     if (item.type == 'punctuation') {
                       nextline = nextline.slice(0, -1); //Remove the space before punctuation
                       nextline += item.alternatives[0].content;
                       formatted_start = helpers.secondsToMinutes(current_start);
                       formatted_end = helpers.secondsToMinutes(json.results.items[index - 1].end_time);
-                      convertedOutput += (subtitleIndex++) + '\n'
-                      convertedOutput += formatted_start + ' --> ' + formatted_end + '\n';
-                      convertedOutput += nextline + '\n\n';
+                      convertedOutput += (subtitleIndex++) + '\n' + formatted_start + ' --> ' + formatted_end + '\n' + nextline + '\n\n';
                       nextline = '';
                       let nextItem = json.results.items[index + 1];
                       if (nextItem) {
@@ -409,16 +412,14 @@ Resources:
                     } else if (item.end_time - current_start > 5) {
                       formatted_start = helpers.secondsToMinutes(current_start);
                       formatted_end = helpers.secondsToMinutes(json.results.items[index - 1].end_time);
-                      convertedOutput += (subtitleIndex++) + '\n'
-                      convertedOutput += formatted_start + ' --> ' + formatted_end + '\n';
-                      convertedOutput += nextline + '\n\n';
+                      convertedOutput += (subtitleIndex++) + '\n' + formatted_start + ' --> ' + formatted_end + '\n' + nextline + '\n\n';
                       nextline = item.alternatives[0].content + ' ';
                       current_start = item.start_time;
                     } else {
                       nextline += item.alternatives[0].content + '';
                     }
 
-                  })
+                  });
 
                   formatted_start = helpers.secondsToMinutes(current_start);
                   if (json.results.items[json.results.items.length - 1].type != 'punctuation') {
@@ -428,50 +429,55 @@ Resources:
                   }
 
                   if (nextline) {
-                    convertedOutput += (subtitleIndex++) + '\n'
-                    convertedOutput += formatted_start + ' --> ' + formatted_end + '\n';
-                    convertedOutput += nextline; //Add any leftover words to the end
+                    convertedOutput += (subtitleIndex++) + '\n' + formatted_start + ' --> ' + formatted_end + '\n' + nextline;
                   }
-                  
                   return convertedOutput;
                 }
               }
-                          
-              const srtConvert = new SrtConvert();
-              exports.handler = async (event) => {
-                console.log(JSON.stringify(event));
 
+              const srtConvert = new SrtConvert();              
+              var download = (url, dest, cb) => {
+                var file = fs.createWriteStream(dest);
+                var request = https.get(url, (response) => {
+                  response.pipe(file);
+                  file.on('finish', () => {
+                    file.close(cb);
+                  });
+                }).on('error', (err) => { // Handle errors
+                  fs.unlink(dest);
+                  if (cb) cb(err.message);
+                });
+              };
+
+              exports.handler = (event) => {
                 let sourcePath = "/tmp/input.json";
                 let destinationPath = '/tmp/output.srt';      
                 let targetBucket = '${TargetBucket}';
 
                 let sourceURI = event['TranscriptFileUri'];
                 let userid = event['userid'];
-                let filename = event['file_name'];
-
-                const sourceFile = fs.createWriteStream(sourcePath);
-                const request = http.get(sourceURI, function(response) {
-                  response.pipe(sourceFile);                
-
+                let filename = event['file_name'];                  
+                    
+                download(sourceURI, sourcePath, () => {
                   fs.readFile(sourcePath, 'utf8', (err, file) => {
                     if (err) {
                       console.log(err);
-                      return {
-                        Error: 'error'
-                      }
-                    }
-                    const convertedOutput = srtConvert.convertFile(file);
+                    }                    
+                    const convertedOutput = srtConvert.convertFile(file);                    
+                    
                     s3.putObject({
-                      Bucket: '${TargetBucket}',
-                      Key: 'results/' + userid+'/' + filename,
+                      Bucket: targetBucket,
+                      Key: 'results/' + userid+'/' + filename + '.srt',
                       Body: convertedOutput
                     }, (err, response) => {
-                      console.log(err);
-                      return {err};
-                    } )                   
-                    
+                      if (err) {
+                        console.log(err);
+                        
+                      }                      
+                      return response;
+                    })                    
                   });
-                }
+                });
               }
           - { TargetBucket: !Ref UploadBucketName}
 
@@ -496,6 +502,11 @@ Resources:
               Action:
                 - 'transcribe:*'
               Resource: "*"
+            - Effect: Allow
+              Action:
+                - 's3:PutObject'
+                - 's3:GetObject'
+              Resource: !Sub "arn:aws:s3:::${UploadBucketName}/*"
   
   SRTGeneratorStateMachine:
     Type: AWS::StepFunctions::StateMachine
