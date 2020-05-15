@@ -55,6 +55,7 @@ Resources:
               userid = os.path.basename(os.path.normpath(os.path.dirname(source_key)))
 
               file_id = str(uuid.uuid4())
+              target_key = "original/%s/%s/%s" % (userid, file_id, file_name)
 
               target_ddb_table = '${TargetDDBTableName}'
 
@@ -63,7 +64,8 @@ Resources:
                 response = s3.head_object(Bucket=source_bucket, Key=source_key)
                 metadata = response['Metadata']
                 waiter = s3.get_waiter('object_exists')
-                waiter.wait(Bucket=source_bucket, Key=source_key)             
+                waiter.wait(Bucket=source_bucket, Key=source_key)
+                s3.copy_object(Bucket=source_bucket, Key=target_key, CopySource={'Bucket': source_bucket, 'Key': source_key})
 
                 # print("Putting item into DynamoDB")
                 
@@ -139,6 +141,10 @@ Resources:
                 - 's3:GetObject'
                 - 's3:GetObjectVersion'
               Resource: !Sub "arn:aws:s3:::${UploadBucketName}/*"
+            - Effect: Allow
+              Action:
+                - 's3:PutObject'                
+              Resource: !Sub "arn:aws:s3:::${UploadBucketName}/original/*"
             - Effect: Allow
               Action:
                 - 's3:ListBucket'
@@ -292,12 +298,12 @@ Resources:
               try:
                 file_id = event['file_id']
                 source_bucket = event['source_bucket']
-                source_key=event['source_key']
+                source_key = "%s/%s/%s" % (event['userid'], event['file_id'], event['file_name'])
                 job_response = transcribe.start_transcription_job(
                   TranscriptionJobName=file_id,
                   LanguageCode='${LanguageCode}',
                   Media={
-                    'MediaFileUri': 's3://%s/%s' % (source_bucket, source_key)
+                    'MediaFileUri': 's3://%s/original/%s' % (source_bucket, source_key)
                   }
                 )
                 event["TranscriptionJobName"] = job_response['TranscriptionJob']['TranscriptionJobName']
@@ -451,17 +457,16 @@ Resources:
                 let destinationPath = '/tmp/output.srt';      
                 let targetBucket = '${TargetBucket}';
 
-                let sURI = event['TranscriptFileUri'];
-                let userid = event['userid'];
+                let sURI = event['TranscriptFileUri'];                
                 let filename = event['file_name'];
-                    
+                let s3key = event['file_id']+'/'+filename+'.srt';
                 download(sURI, sourcePath, () => {
                   fs.readFile(sourcePath, 'utf8', (err, file) => {
                     if (err) {
                       console.log(err);
                     }                    
                     const convertedOutput = srtConvert.convertFile(file);
-                    const targetKey = 'protected/' + userid+'/' + filename + '.srt'
+                    const targetKey = 'protected/'+event['userid']+'/'+s3key
                     s3.putObject({
                       Bucket: targetBucket,
                       Key: targetKey,
@@ -471,7 +476,7 @@ Resources:
                         console.log(err);
                         callback(err);
                       }           
-                      event['s3key_srt_file'] = filename + '.srt';
+                      event['s3key_srt_file'] = s3key;
                       callback(null, event);
                     })                    
                   });
@@ -547,7 +552,7 @@ Resources:
             - Effect: Allow
               Action:
                 - 's3:GetObject'
-              Resource: !Sub "arn:aws:s3:::${UploadBucketName}/uploads/*"
+              Resource: !Sub "arn:aws:s3:::${UploadBucketName}/original/*"
             - Effect: Allow
               Action:
                 - 'dynamodb:UpdateItem'
