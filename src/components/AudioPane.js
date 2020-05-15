@@ -83,7 +83,7 @@ function AudioPane(props) {
         <CircularProgress className={classes.progress} />
         : (
           audios && audios.length > 0 ?
-            <AudioGrid audios={audios} />
+            <AudioGrid audios={audios} userid={userid} />
             : 'No record found'
         )
       }

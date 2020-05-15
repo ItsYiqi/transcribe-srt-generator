@@ -11,7 +11,7 @@ import * as mutations from '../graphql/mutations';
 
 
 function AudioGrid(props) {
-    const { audios } = props;
+    const { audios, userid } = props;
 
     const useGridStyles = makeStyles(theme => ({
         root: {
@@ -37,7 +37,7 @@ function AudioGrid(props) {
             <GridList className={classes.gridList}>
                 {
                     audios.map(audio => (
-                        <AudioCard audio={audio} key={audio.id} />
+                        <AudioCard audio={audio} key={audio.id} userid={userid} />
                     ))
                 }
             </GridList>

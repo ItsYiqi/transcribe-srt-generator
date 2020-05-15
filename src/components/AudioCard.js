@@ -1,16 +1,22 @@
-import React from 'react'
+import React, { useEffect } from 'react';
 import { API, graphqlOperation } from 'aws-amplify';
 import { makeStyles } from "@material-ui/core/styles";
 
 import Typography from "@material-ui/core/Typography";
 import Card from '@material-ui/core/Card';
 import CardContent from '@material-ui/core/CardContent';
+import Link from '@material-ui/core/Link';
+import CircularProgress from '@material-ui/core/CircularProgress';
+
+import { Storage } from 'aws-amplify';
+
 
 import { red } from '@material-ui/core/colors';
 
 
 
 import * as mutations from './../graphql/mutations';
+import * as queries from '../graphql/queries';
 
 
 import awsmobile from '../aws-exports';
@@ -19,10 +25,11 @@ import awsmobile from '../aws-exports';
 
 
 function AudioCard(props) {
-  const { audio } = props;
+  const { audio, userid } = props;
   const [cardVisible, setCardVisible] = React.useState(true);
+  const [srtLink, setSrtLink] = React.useState('');
 
-
+  let loader;
   const useCardStyles = makeStyles(theme => ({
     card: {
       width: 290,
@@ -87,9 +94,6 @@ function AudioCard(props) {
 
   const classes = useCardStyles();
 
-
-
-
   const deleteAudio = async (audio) => {
     const input = {
       id: audio.id
@@ -109,6 +113,24 @@ function AudioCard(props) {
     }
   }
 
+  useEffect(() => {
+    const checkSRTLink = () => {      
+      loader = setInterval(async () => {
+        console.log(audio.id);
+        const input = {
+          id: audio.id
+        }
+        const record = await API.graphql(graphqlOperation(queries.getAudio, input));
+        if (record.data.getAudio.srtfilekey != '' ) {
+          console.log(record);
+          clearInterval(loader);  
+          const linkURL = await Storage.get(record.data.getAudio.srtfilekey, { identityId: userid, level: 'protected' });
+          setSrtLink(linkURL);
+        }
+      }, 1000);
+    };
+    checkSRTLink();
+  }, []);
 
   return (
     <>
@@ -118,10 +140,17 @@ function AudioCard(props) {
             <CardContent>
               <Typography variant="body2" color="textSecondary" component="div">
                 {audio.s3key.replace(/^.*[\\\/]/, '')}
+                {srtLink !== '' ?
+                <Link href={srtLink} color="inherit">
+                  Download SRT file
+                </Link>
+                : 
+                <CircularProgress />
+                }
               </Typography>
-                
+
             </CardContent>
-          </Card>         
+          </Card>
         </div>
 
       }
