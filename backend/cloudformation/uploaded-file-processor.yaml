@@ -238,7 +238,7 @@ Resources:
                     responseData = {'Failure': 'Something bad happened.'}
                 cfnresponse.send(event, context, responseStatus, responseData)
 
-            def add_notification(LambdaArn, Bucket):
+            def add_notification(LambdaArn, Bucket):              
                 bucket_notification = s3.BucketNotification(Bucket)
                 response = bucket_notification.put(
                   NotificationConfiguration={
@@ -267,7 +267,7 @@ Resources:
             def delete_notification(Bucket):
                 bucket_notification = s3.BucketNotification(Bucket)
                 response = bucket_notification.put(
-                    NotificationConfiguration={}
+                  NotificationConfiguration={}
                 )
                 print("Delete request completed....")
       
@@ -360,12 +360,11 @@ Resources:
               {
                 constructor()
                 {
-                  function padString(string, length) {
+                  const padString = (string, length) => {
                     return (new Array(length + 1).join('0') + string).slice(-length);
                   }
 
-                  this.secondsToMinutes = function(seconds)
-                  {
+                  this.secondsToMinutes = (seconds) => {
                     var hours = 0;
                     var minutes = 0;
                     hours = Math.floor(seconds / 3600);
@@ -391,7 +390,6 @@ Resources:
                   let subtitleIndex = 1;
 
                   const json = JSON.parse(file);
-
                   let current_start = json.results.items[0].start_time;
                   let formatted_start;
                   let formatted_end;
@@ -400,7 +398,7 @@ Resources:
 
                   json.results.items.map((item, index) => {
                     if (item.type == 'punctuation') {
-                      nextline = nextline.slice(0, -1); //Remove the space before punctuation
+                      nextline = nextline.slice(0, -1);
                       nextline += item.alternatives[0].content;
                       formatted_start = helpers.secondsToMinutes(current_start);
                       formatted_end = helpers.secondsToMinutes(json.results.items[index - 1].end_time);
@@ -419,7 +417,6 @@ Resources:
                     } else {
                       nextline += item.alternatives[0].content + '';
                     }
-
                   });
 
                   formatted_start = helpers.secondsToMinutes(current_start);
@@ -435,52 +432,92 @@ Resources:
                   return convertedOutput;
                 }
               }
-
-              const srtConvert = new SrtConvert();              
+              const srtConvert = new SrtConvert();
               var download = (url, dest, cb) => {
                 var file = fs.createWriteStream(dest);
-                var request = https.get(url, (response) => {
-                  response.pipe(file);
+                var req = https.get(url, (resp) => {
+                  resp.pipe(file);
                   file.on('finish', () => {
                     file.close(cb);
                   });
-                }).on('error', (err) => { // Handle errors
+                }).on('error', (err) => {
                   fs.unlink(dest);
                   if (cb) cb(err.message);
                 });
               };
 
-              exports.handler = (event) => {
+              exports.handler = (event, context, callback) => {
                 let sourcePath = "/tmp/input.json";
                 let destinationPath = '/tmp/output.srt';      
                 let targetBucket = '${TargetBucket}';
 
-                let sourceURI = event['TranscriptFileUri'];
+                let sURI = event['TranscriptFileUri'];
                 let userid = event['userid'];
-                let filename = event['file_name'];                  
+                let filename = event['file_name'];
                     
-                download(sourceURI, sourcePath, () => {
+                download(sURI, sourcePath, () => {
                   fs.readFile(sourcePath, 'utf8', (err, file) => {
                     if (err) {
                       console.log(err);
                     }                    
-                    const convertedOutput = srtConvert.convertFile(file);                    
-                    
+                    const convertedOutput = srtConvert.convertFile(file);
+                    const targetKey = 'protected/' + userid+'/' + filename + '.srt'
                     s3.putObject({
                       Bucket: targetBucket,
-                      Key: 'results/' + userid+'/' + filename + '.srt',
+                      Key: targetKey,
                       Body: convertedOutput
                     }, (err, response) => {
                       if (err) {
                         console.log(err);
-                        
-                      }                      
-                      return response;
+                        callback(err);
+                      }           
+                      event['s3key_srt_file'] = filename + '.srt';
+                      callback(null, event);
                     })                    
                   });
                 });
               }
-          - { TargetBucket: !Ref UploadBucketName}
+          - { TargetBucket: !Ref UploadBucketName}  
+  
+  SRTUpdateDDBLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      Description: Check Transcribe Job
+      Handler: index.lambda_handler
+      Role: !GetAtt SRTGeneratorLambdaExecutionRole.Arn
+      Timeout: 30
+      Runtime: python3.7
+      Code:
+        ZipFile: !Sub
+          - |
+              import json
+              import boto3
+
+              dynamodb = boto3.client('dynamodb')
+
+              def lambda_handler(event, context):
+                target_ddb_table = '${TargetDDBTableName}'
+                try:
+                  dynamodb.update_item(
+                    TableName=target_ddb_table,
+                    Key={
+                      'id': {
+                        'S': event['file_id']                        
+                      }
+                    },
+                    AttributeUpdates={
+                      'srtfilekey': {
+                        'Value': {
+                          'S': event['s3key_srt_file']
+                        }
+                      }
+                    }
+                  )               
+
+                  return event
+                except Exception as e:
+                  print(e)
+          - { TargetDDBTableName: !Ref TargetDDBTableName }
 
   SRTGeneratorLambdaExecutionRole:
     Type: AWS::IAM::Role
@@ -506,8 +543,15 @@ Resources:
             - Effect: Allow
               Action:
                 - 's3:PutObject'
+              Resource: !Sub "arn:aws:s3:::${UploadBucketName}/protected/*"
+            - Effect: Allow
+              Action:
                 - 's3:GetObject'
-              Resource: !Sub "arn:aws:s3:::${UploadBucketName}/*"
+              Resource: !Sub "arn:aws:s3:::${UploadBucketName}/uploads/*"
+            - Effect: Allow
+              Action:
+                - 'dynamodb:UpdateItem'
+              Resource: !Sub "arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TargetDDBTableName}"
   
   SRTGeneratorStateMachine:
     Type: AWS::StepFunctions::StateMachine
@@ -558,15 +602,21 @@ Resources:
                 "SRTConversion": {
                   "Type": "Task",
                   "Resource": "${SRTConversionLambdaArn}",
-                  "Next": "SRTConversionEnd"
+                  "Next": "SRTUpdateDDB"
                 },
+                "SRTUpdateDDB": {
+                  "Type": "Task",
+                  "Resource": "${SRTUpdateDDBLambdaArn}",
+                  "Next": "SRTConversionEnd"
+                },                
                 "SRTConversionEnd": {
                   "Type": "Pass",
                   "End": true
                 }
               }
             }
-          - {TranscribeJobStartLambdaArn: !GetAtt TranscribeJobStartLambda.Arn, TranscribeJobStatusLambdaArn: !GetAtt TranscribeJobStatusLambda.Arn, SRTConversionLambdaArn: !GetAtt SRTConversionLambda.Arn}
+
+          - {TranscribeJobStartLambdaArn: !GetAtt TranscribeJobStartLambda.Arn, TranscribeJobStatusLambdaArn: !GetAtt TranscribeJobStatusLambda.Arn, SRTConversionLambdaArn: !GetAtt SRTConversionLambda.Arn, SRTUpdateDDBLambdaArn: !GetAtt SRTUpdateDDBLambda.Arn}
 
   SRTGeneratorStateMachineRole:
     Type: AWS::IAM::Role
@@ -594,8 +644,5 @@ Resources:
                   - !GetAtt TranscribeJobStartLambda.Arn
                   - !GetAtt TranscribeJobStatusLambda.Arn                  
                   - !GetAtt SRTConversionLambda.Arn
-              - Effect: Allow
-                Action:
-                  - 's3:PutObject'
-                Resource: !Sub "arn:aws:s3:::${UploadBucketName}/results/*"
+                  - !GetAtt SRTUpdateDDBLambda.Arn
 
