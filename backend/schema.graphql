@@ -1,11 +1,11 @@
 type Audio
-  @auth(rules: [{ allow: owner, identityField: "sub", queries: [list] }])  
+  @auth(rules: [{ allow: owner, identityField: "sub", queries: [list, get] }])  
   @model(
     subscriptions: { level: off }
-    queries: { list: "listAudios", }
+    queries: { list: "listAudios", get: "getAudio",}
   ) {
     id: ID!
     s3key: String!
-    subtitlekey: String
+    srtfilekey: String
     owner: String
   }
