@@ -1,6 +1,16 @@
 /* eslint-disable */
 // this is an auto generated file. This will be overwritten
 
+export const getAudio = /* GraphQL */ `
+  query GetAudio($id: ID!) {
+    getAudio(id: $id) {
+      id
+      s3key
+      srtfilekey
+      owner
+    }
+  }
+`;
 export const listAudios = /* GraphQL */ `
   query ListAudios(
     $filter: ModelAudioFilterInput
@@ -11,7 +21,7 @@ export const listAudios = /* GraphQL */ `
       items {
         id
         s3key
-        subtitlekey
+        srtfilekey
         owner
       }
       nextToken

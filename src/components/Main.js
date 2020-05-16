@@ -1,11 +1,8 @@
 import React from 'react';
 import AudioPane from './AudioPane';
 
-import { Connect } from "aws-amplify-react";
-import { Auth, graphqlOperation } from 'aws-amplify';
+import { Auth } from 'aws-amplify';
 
-
-import * as queries from '../graphql/queries';
 
 import PropTypes from 'prop-types';
 import { makeStyles } from '@material-ui/core/styles';

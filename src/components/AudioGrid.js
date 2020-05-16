@@ -1,13 +1,10 @@
 import React from 'react'
-import { Connect } from "aws-amplify-react";
-import { graphqlOperation } from 'aws-amplify';
 
 import { makeStyles } from "@material-ui/core/styles";
 import GridList from '@material-ui/core/GridList';
 
 import AudioCard from './AudioCard'
 
-import * as mutations from '../graphql/mutations';
 
 
 function AudioGrid(props) {

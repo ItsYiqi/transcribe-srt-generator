@@ -5,7 +5,7 @@ import './App.css';
 import Amplify, { Auth, Hub } from 'aws-amplify';
 import awsmobile from './aws-exports';
 // import { withAuthenticator } from 'aws-amplify-react';
-import { ConfirmSignIn, ConfirmSignUp, ForgotPassword, RequireNewPassword, SignIn, SignUp, VerifyContact, withAuthenticator, withOAuth } from 'aws-amplify-react';
+import { withOAuth } from 'aws-amplify-react';
 // import { withOAuth } from "aws-amplify-react";
 
 import AWSAppSyncClient from 'aws-appsync';

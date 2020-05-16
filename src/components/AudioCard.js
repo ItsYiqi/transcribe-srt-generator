@@ -33,7 +33,7 @@ function AudioCard(props) {
   const useCardStyles = makeStyles(theme => ({
     card: {
       width: 290,
-      minHeight: 350,
+      minHeight: 150,
       marginRight: 5,
       marginLeft: 5,
       marginTop: 10,
@@ -115,19 +115,17 @@ function AudioCard(props) {
 
   useEffect(() => {
     const checkSRTLink = () => {      
-      loader = setInterval(async () => {
-        console.log(audio.id);
+      loader = setInterval(async () => {        
         const input = {
           id: audio.id
         }
         const record = await API.graphql(graphqlOperation(queries.getAudio, input));
-        if (record.data.getAudio.srtfilekey != '' ) {
-          console.log(record);
+        if (record.data.getAudio.srtfilekey !== null ) {          
           clearInterval(loader);  
           const linkURL = await Storage.get(record.data.getAudio.srtfilekey, { identityId: userid, level: 'protected' });
           setSrtLink(linkURL);
         }
-      }, 1000);
+      }, 5000);
     };
     checkSRTLink();
   }, []);
