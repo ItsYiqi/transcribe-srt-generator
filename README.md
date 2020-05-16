@@ -58,6 +58,7 @@ Current Environment: master
 
 ```
 
+----
 
 ## Add Auth
 
@@ -157,4 +158,66 @@ To deploy:
 amplify push -y
 ```
 
-To be continued.....
+----
+
+## Add API
+
+```
+amplify add api
+```
+
+> ? Please select from one of the below mentioned services: `GraphQL`
+
+> ? Provide API name: `press Enter to accept default`
+
+> ? Choose the default authorization type for the API `Amazon Cognito User Pool`
+
+> Use a Cognito user pool configured as a part of this project.
+
+> ? Do you want to configure advanced settings for the GraphQL API `Yes, I want to make some additional changes.`
+
+> ? Configure additional auth types? `No`
+
+> ? Configure conflict detection? `No`
+
+> ? Do you have an annotated GraphQL schema? `Yes`
+
+> ? Provide your schema file path: `./backend/schema.graphql`
+
+```
+amplify push -y
+```
+
+----
+
+## Add Storage
+
+```
+amplify add storage
+```
+
+> ? Please select from one of the below mentioned services: `Content (Images, audio, video, etc.)`
+
+
+> ? Please provide a friendly name for your resource that will be used to label this category in the project: `press Enter to accept default`
+
+> ? Please provide bucket name: `press Enter to accept default`
+
+> ? Who should have access: `Auth users only`
+
+> ? What kind of access do you want for Authenticated users? `create/update, read`
+
+> ? Do you want to add a Lambda Trigger for your S3 Bucket? `No`
+
+> Successfully added resource s3???????? locally
+
+```
+amplify push -y
+```
+
+
+
+
+
+
+
