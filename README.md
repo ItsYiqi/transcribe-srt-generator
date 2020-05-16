@@ -215,8 +215,26 @@ amplify add storage
 amplify push -y
 ```
 
+----
 
+## AWS CloudFormation stack for SRT Generator
 
+```
+# export name of DynamoDB table provioned by Amplify
+export audioDDB=`aws dynamodb list-tables --output text | grep "Audio-.*-master" | awk '{print $2}'`
+
+# export name of S3 bucket provioned by Amplify
+export audioS3Bucket=`cat src/aws-exports.js | grep "aws_user_files_s3_bucket\"" | awk '{print $2}' |  sed -e 's/^"//' -e 's/",$//'`
+
+# deploy the backend stack to AWS cloud
+aws cloudformation deploy \
+--stack-name srt-generator \
+--parameter-overrides \
+UploadBucketName=$audioS3Bucket \
+TargetDDBTableName=$audioDDB \
+--template-file ./backend/cloudformation/srt-generator.yaml --capabilities CAPABILITY_IAM
+
+```
 
 
 
