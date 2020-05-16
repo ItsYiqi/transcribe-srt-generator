@@ -4,6 +4,17 @@ This application generates SRT file by uploading a "mp3" audio file to the cloud
 
 The speech-to-text service behind is Amazon Transcribe
 
+----
+
+# Architecture
+
+![](doc/images/srt-generator-architecture.png)
+
+## Definition of state machine as Step functions
+
+![](doc/images/stepfunctions_graph.png)
+----
+
 # Deployment guide:
 
 
